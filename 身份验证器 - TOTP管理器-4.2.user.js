@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         身份验证器 - TOTP管理器
 // @namespace    http://tampermonkey.net/
-// @version      4.2
+// @version      4.5
 // @description  仿Android身份验证器界面的TOTP动态验证码管理器
 // @author       You
 // @match        *://*/*
@@ -129,6 +129,7 @@
     let mainPanel = null;
     let triggerButton = null;
     let isMinimized = false;
+    let fadeTimer = null; // 淡化定时器
 
     // 创建主面板
     function createMainPanel() {
@@ -375,6 +376,36 @@
         renderAccounts();
     }
 
+    // 复制验证码功能
+    function copyCode(code, element) {
+        if (code && code !== '000000' && code !== 'ERROR') {
+            const cleanCode = code.replace(/\s/g, '');
+            navigator.clipboard.writeText(cleanCode).then(() => {
+                // 显示复制成功效果
+                const originalText = element.textContent;
+                const originalColor = element.style.color;
+
+                element.textContent = '已复制!';
+                element.style.color = '#4caf50';
+                element.style.transform = 'scale(1.05)';
+
+                setTimeout(() => {
+                    element.textContent = originalText;
+                    element.style.color = originalColor;
+                    element.style.transform = 'scale(1)';
+                }, 1000);
+            }).catch(() => {
+                // 复制失败的提示
+                const originalText = element.textContent;
+                element.textContent = '复制失败';
+                element.style.color = '#f44336';
+                setTimeout(() => {
+                    element.textContent = originalText;
+                }, 1000);
+            });
+        }
+    }
+
     // 渲染账户列表
     function renderAccounts() {
         const container = mainPanel.querySelector('#accounts-container');
@@ -421,7 +452,7 @@
                         <div style="flex: 1; min-width: 0; margin-right: 16px;">
                             <div style="font-size: 18px; font-weight: 500; color: #212121; margin-bottom: 8px; line-height: 1.2;">${account.name}</div>
 
-                            <div style="
+                            <div class="code-display" data-id="${account.id}" style="
                                 font-size: 32px;
                                 font-weight: 400;
                                 font-family: 'Roboto Mono', 'SF Mono', 'Monaco', monospace;
@@ -431,7 +462,14 @@
                                 white-space: nowrap;
                                 overflow: hidden;
                                 margin-bottom: 12px;
-                            " id="code-${account.id}">000 000</div>
+                                cursor: pointer;
+                                transition: all 0.2s;
+                                border-radius: 4px;
+                                padding: 4px 8px;
+                                margin: 8px -8px 12px -8px;
+                            " id="code-${account.id}" title="点击复制验证码"
+                               onmouseover="this.style.background='rgba(0,0,0,0.05)'"
+                               onmouseout="this.style.background='transparent'">000 000</div>
 
                             <div style="margin-top: 8px;">
                                 <div id="progress-${account.id}" style="
@@ -495,7 +533,7 @@
             `;
         }).join('');
 
-        // 绑定事件
+        // 绑定删除事件
         container.querySelectorAll('.delete-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -508,23 +546,23 @@
             });
         });
 
+        // 绑定复制按钮事件
         container.querySelectorAll('.copy-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const id = parseInt(btn.dataset.id);
                 const codeElement = document.getElementById(`code-${id}`);
-                const code = codeElement.textContent.replace(/\s/g, '');
+                const code = codeElement.textContent;
+                copyCode(code, btn);
+            });
+        });
 
-                if (code && code !== '000000' && code !== 'ERROR') {
-                    navigator.clipboard.writeText(code).then(() => {
-                        btn.textContent = '✓';
-                        btn.style.color = '#4caf50';
-                        setTimeout(() => {
-                            btn.textContent = '📋';
-                            btn.style.color = '#757575';
-                        }, 1500);
-                    });
-                }
+        // 绑定验证码点击复制事件
+        container.querySelectorAll('.code-display').forEach(codeElement => {
+            codeElement.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const code = codeElement.textContent;
+                copyCode(code, codeElement);
             });
         });
     }
@@ -591,6 +629,40 @@
         }
     }
 
+    // 触发按钮淡化管理 - 只在鼠标经过按钮位置时显示
+    function startFadeTimer() {
+        if (fadeTimer) clearTimeout(fadeTimer);
+        fadeTimer = setTimeout(() => {
+            if (triggerButton && !mainPanel) {
+                triggerButton.style.opacity = '0';
+                triggerButton.style.visibility = 'hidden';
+                triggerButton.style.pointerEvents = 'none';
+            }
+        }, 3000);
+    }
+
+    function showTriggerButton() {
+        if (triggerButton) {
+            triggerButton.style.opacity = '0.9';
+            triggerButton.style.visibility = 'visible';
+            triggerButton.style.pointerEvents = 'auto';
+        }
+        if (fadeTimer) clearTimeout(fadeTimer);
+    }
+
+    // 检查鼠标是否在按钮区域
+    function isMouseNearButton(mouseX, mouseY) {
+        if (!triggerButton) return false;
+
+        const rect = triggerButton.getBoundingClientRect();
+        const buffer = 50; // 检测范围缓冲区
+
+        return mouseX >= rect.left - buffer &&
+               mouseX <= rect.right + buffer &&
+               mouseY >= rect.top - buffer &&
+               mouseY <= rect.bottom + buffer;
+    }
+
     // 创建可拖拽的触发按钮
     function createTriggerButton() {
         const buttonPos = storage.loadPosition('button_position', { x: window.innerWidth - 70, y: 100 });
@@ -617,6 +689,8 @@
             transition: all 0.3s ease;
             user-select: none;
             opacity: 0.9;
+            visibility: visible;
+            pointer-events: auto;
         `;
 
         // 使按钮可拖拽
@@ -624,7 +698,7 @@
 
         // 悬停效果
         triggerButton.addEventListener('mouseenter', () => {
-            triggerButton.style.opacity = '1';
+            showTriggerButton();
             triggerButton.style.transform = 'scale(1.1)';
             triggerButton.style.boxShadow = '0 6px 16px rgba(25,118,210,0.4)';
         });
@@ -632,10 +706,21 @@
         triggerButton.addEventListener('mouseleave', () => {
             triggerButton.style.transform = 'scale(1)';
             triggerButton.style.boxShadow = '0 4px 12px rgba(25,118,210,0.3)';
-            triggerButton.style.opacity = '0.9';
+            startFadeTimer();
+        });
+
+        // 只在鼠标经过按钮位置时显示
+        document.addEventListener('mousemove', (e) => {
+            if (isMouseNearButton(e.clientX, e.clientY)) {
+                showTriggerButton();
+                startFadeTimer();
+            }
         });
 
         document.body.appendChild(triggerButton);
+
+        // 初始启动淡化定时器
+        startFadeTimer();
     }
 
     // 使触发按钮可拖拽
@@ -705,8 +790,11 @@
     function togglePanel() {
         if (mainPanel) {
             closePanel();
+            startFadeTimer(); // 关闭面板后重新开始淡化计时
         } else {
             createMainPanel();
+            showTriggerButton(); // 打开面板时保持按钮可见
+            if (fadeTimer) clearTimeout(fadeTimer);
         }
     }
 
